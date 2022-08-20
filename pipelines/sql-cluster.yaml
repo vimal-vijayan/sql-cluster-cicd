@@ -166,7 +166,129 @@ parameters:
 stages:
 - stage: resourceCreation
   jobs:
-    - template: jobs/init.yaml
+    - job: init
+      variables:
+        appServerType: ${{ parameters.appServerType }}
+        subnetIds1: "${{ parameters.subnetIds1 }}"
+        subnetIds2: "${{ parameters.subnetIds2 }}"
+        typeOfEnv: ${{ parameters.typeOfEnv }}
+      steps:
+      - powershell: |
+          $typeOfEnv = "$(typeOfEnv)"
+          $env_type = switch ( $typeOfEnv )
+          {
+              'DE' { 'dev' }
+              'QA' { 'qa' }
+              'LD' { 'load' }
+              'ST' { 'stage' }
+              'BC' { 'bcp' }
+              'PD' { 'prod' }
+              'NPD' { 'nonprod' }
+          }
+          Write-Host "Type of Environment : " $env_type 
+          echo "##vso[task.setvariable variable=env_type;isOutput=true]$env_type"
+          echo "##vso[task.setvariable variable=env_type]$env_type"
+        name: setTypeOfEnv
+        displayName: Set Type Of Environment
+
+      - powershell: |
+          echo ''
+          echo '----Input Parameters for Resource Group Creation -----'
+          echo ''
+          echo 'App Server Type             : ${{parameters.appServerType}}'
+          echo 'Location 1                  : ${{ parameters.region1 }}'
+          echo 'Location 2                  : ${{ parameters.region2 }}'
+          echo 'FSS Owner                   : ${{ parameters.fssOwner }} '
+          echo 'Type of Environment         : ${{ parameters.typeOfEnv }} '
+          echo 'System name for Naming API  : ${{ parameters.clusterName }} '
+          echo 'Agent Pool Name             : ${{ parameters.clusterName }} '
+          echo 'ADO Organization            : $(System.CollectionUri)'
+          echo 'App Server Type             : ${{ parameters.appServerType }}'
+          echo 'Windows Version             : ${{ parameters.windowsVersion }} '
+          echo 'VPC ID Region 1             : ${{ parameters.vpcId1 }}'
+          echo 'subnet Ids Location1        : ${{ parameters.subnetIds1 }}'
+          echo 'VPC ID Region 2             : ${{ parameters.vpcId1 }}'
+          echo 'subnet Ids Location2        : ${{ parameters.subnetIds2 }}'
+          echo 'Instance Type               : ${{ parameters.instance_type }}'
+          echo 'E Drive                     : ${{ parameters.Edrive }}'
+          echo 'F Drive                     : ${{ parameters.Fdrive }}'
+          echo 'G Drive                     : ${{ parameters.Gdrive }}'
+          echo 'S3 bucketName               : ${{ parameters.bucketName }}'
+          try {
+            Write-Host 'ADO URL                     : '$(System.CollectionUri)''
+            Write-Host 'ADO PAT                     : '$(adoPat)''
+            Write-Host 'Client Secret               : '$(client-secret)''
+            Write-Host 'Country Code                : '$(country-code)''
+            Write-Host 'Naming Client ID            : '$(namingClientId)''
+            Write-Host 'Service User                : '$(saadminuser)''
+            Write-Host 'SQL Agent URL               : '$(System.CollectionUri)''
+            Write-Host 'SQL Setup User              : '$(sqlsetupuser)''
+            Write-Host 'SQL setup password          : '$(sqlsetuppass)''
+            Write-Host 'Oauth Api URL               : '$(urlOauthApi)''
+            Write-Host 'Naming Api URL V2           : '$(urlNamingApiV2)''
+          }
+
+          catch {
+            Write-Host "-----------------------------------------------------------------"
+            Write-Error "An error occurred: Check the AWS Parameter store values provided"
+            Write-Host "-----------------------------------------------------------------"
+            Write-Host $_
+            Exit 0
+          }
+
+
+          $temp = "$(appServerType)"
+          if ( $temp -eq 'Silver' ){
+            $appServers1 = 2
+            $appServers2 = 1
+          } elseif ( $temp -eq 'Gold' ){
+            $appServers1 = 2 ;
+            $appServers2 = 2 ;
+          } else {
+            Write-Host "Else"
+            $appServers1 = 0 ;
+            $appServers2 = 0 ;
+          }
+          echo "##vso[task.setvariable variable=appServers1]$appServers1"
+          echo "##vso[task.setvariable variable=appServers2]$appServers2"
+        displayName: Display Parameters
+
+      - template: steps/request-server.yaml
+        parameters:
+          fssOwner: ${{ parameters.fssOwner }}
+          typeOfEnv: ${{ parameters.typeOfEnv }}
+          clusterName: ${{ parameters.clusterName }}
+          region: ${{ parameters.region1 }}
+          appServers: $(appServers1)
+
+      - task: PowerShell@2
+        displayName: 'Display location1 VM Names'
+        name: SetVmNames1
+        enabled: true
+        inputs:
+          filePath: '$(System.DefaultWorkingDirectory)/LandingZoneAWS/set-vm-json.ps1'
+          arguments: >
+            -location     1    
+
+      - template: steps/request-server.yaml
+        parameters:
+          fssOwner: ${{ parameters.fssOwner }}
+          typeOfEnv: ${{ parameters.typeOfEnv }}
+          clusterName: ${{ parameters.clusterName }}
+          region: ${{ parameters.region2 }}
+          appServers: $(appServers2)
+
+      - task: PowerShell@2
+        displayName: 'Display location2 VM Names'
+        name: SetVmNames2
+        enabled: true
+        inputs:
+          filePath: '$(System.DefaultWorkingDirectory)/LandingZoneAWS/set-vm-json.ps1'
+          arguments: >
+            -vms1         '$(vms1)'
+            -subnetIds1   '$(subnetIds1)'
+            -subnetIds2   '$(subnetIds2)'
+            -location     2
     - job: createResources
       displayName: Create Ec2 Instances
       dependsOn:
