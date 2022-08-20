@@ -1,0 +1,204 @@
+name: $(Build.DefinitionName)_$(clusterName)_$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger:
+- none
+
+pool:
+  vmImage: 'windows-2019'
+
+variables:
+- template: landingzone-variables.yaml
+- name: windowsAmi
+  value: Windows_Server-2016-English-Full-Base-*
+- name: agent-name
+  value: AwsTestSqlCluster02
+- name: urlNamingApiV2
+  value: https://onecloudselfserviceapi.deloitte.com/api/serverRegistrations
+
+
+parameters:
+- name: agentName
+  displayName: ADO Agent Name
+  default: AwsTestSqlCluster02
+  type: string
+
+- name: typeOfEnv
+  displayName: Select type of Environment (*) [DE = dev, QA=qa, LD=load, ST=stage, BC = bcp, PD = prod] [The AWS parameter store values needed to be setup with respect to the environment eg:/SqlCluster/dev/adoPat for DE | /SqlCluster/prod/Url for PD]
+  default: DE
+  type: string
+  values:
+    - DE
+    - QA
+    - LD
+    - ST
+    - BC
+    - PD
+
+- name: appServerType
+  displayName: Select The Type Of SQL Cluster
+  default: Silver
+  type: string
+  values:
+    - Silver
+    - Gold
+
+- name: windowsVersion
+  displayName: Select the Windows Version
+  default: 2019
+  type: number
+  values:
+    - 2016
+    - 2019
+
+- name: region1
+  displayName: Select Region 1
+  default: 'us-east-1'
+  type: string
+  values:
+    - 'us-east-2'
+    - 'us-east-1'
+    - 'us-west-1'
+    - 'us-west-2'
+
+- name: vpcId1
+  displayName: Enter VPC ID Region 1
+  default: vpc-01da23689ec433526
+  type: string
+
+- name: subnetIds1
+  displayName: Enter Subnet ID's region 1 (comma seperate one more subnets)
+  type: string
+  default: subnet-05305d7549ca69c94,subnet-0936ce6c9a3ac80c9
+
+- name: region2
+  displayName: Select Region 2
+  default: us-west-2
+  type: string
+  values:
+    - 'us-east-2'
+    - 'us-east-1'
+    - 'us-west-1'
+    - 'us-west-2'
+
+- name: vpcId2
+  displayName: Enter VPC ID Region 2
+  default: vpc-01eb9bf1028fd620d
+  type: string
+
+- name: subnetIds2
+  displayName: Enter Subnet ID's region 2 (comma seperate one more subnets)
+  type: string
+  default: subnet-0cb37c00d8b2a6cae,subnet-0d37f9836f6bc9744
+
+- name: instance_type
+  displayName: Enter Instance Type
+  type: string
+  default: r5b.large
+  values:
+    - r5b.metal
+    - m5.large
+    - m5.xlarge
+    - m5.2xlarge
+    - m5.4xlarge
+    - m5.8xlarge
+    - m5.16xlarge
+    - m5.24xlarge
+    - m5.metal
+    - t3.large
+    - t3.xlarge
+
+- name: Edrive
+  displayName: Size (GB) for Drive E
+  type: number
+  default: 150
+
+- name: Fdrive
+  displayName: Size (GB) for Drive F
+  type: number
+  default: 300
+
+- name: Gdrive
+  displayName: Size (GB) for Drive G
+  type: number
+  default: 150
+
+- name: serviceConnection
+  displayName: AWS Service Connection Name
+  default: SCM DCM MSP Test Account
+  type: string
+
+- name: terraformServiceConnection
+  displayName:  AWS-Terraform Service Connection Name
+  default: AWSDevTerraform1307
+  type: string
+
+- name: bucketName
+  displayName:  AWS s3 Bucket Name (New bucket with cluster name will be created if No bucket name provided, Recommended to use single s3 bucket for a AWS Account)
+  default: Nil
+  type: string
+
+- name: clusterName
+  displayName: Enter Cluster Name (Use lowercase for clustername)
+  default: awscluster01
+  type: string
+
+- name: fssOwner
+  displayName: Select FSS Owner (*)
+  default: ITS
+  type: string
+  values:
+    - ITS
+    - AUD
+    - ADV
+    - ENA
+    - TAX
+    - CON
+
+- name: skipCluster
+  displayName: Change the value to false and run the pipeline only if SQL installation fails for the 1st try
+  default: true
+  type: string
+  values:
+  - true
+  - false
+
+
+stages:
+- stage: resourceCreation
+  jobs:
+    - template: jobs/init.yaml
+    - job: createResources
+      displayName: Create Ec2 Instances
+      dependsOn:
+        - init
+      variables:
+        vmsJson: $[ dependencies.init.outputs['SetVmNames2.vmsJson'] ]
+        appServerType: ${{ parameters.appServerType }}
+        list1: $[ dependencies.init.outputs['SetVmNames1.list1'] ]
+        list2: $[ dependencies.init.outputs['SetVmNames2.list2'] ]
+        vpcId1: ${{ parameters.vpcId1 }}
+        vpcId2: ${{ parameters.vpcId2 }}
+        instance_type: ${{ parameters.instance_type }}
+        terraformDir: LandingZoneAWS/terraform
+        subnetlist1: $[ dependencies.init.outputs['SetVmNames2.subnetlist1'] ]
+        subnetlist2: $[ dependencies.init.outputs['SetVmNames2.subnetlist2'] ]
+        clusterName: ${{ parameters.clusterName }}
+        env_type: $[ dependencies.init.outputs['setTypeOfEnv.env_type'] ]
+        region2: ${{ parameters.region2 }}
+        region1: ${{ parameters.region1 }}
+        windowsAmi: "Windows_Server-${{ parameters.windowsVersion }}-English-Full-Base-*"
+        Edrive : ${{ parameters.Edrive }}
+        Fdrive : ${{ parameters.Fdrive }}
+        Gdrive : ${{ parameters.Gdrive }}
+      steps:
+        - template: set-variable.yaml
+          parameters:
+            rootDirectory: $(System.DefaultWorkingDirectory)/LandingZoneAWS/terraform
+        - template: terraform-deploy.yaml
+          parameters:
+            workingDirectory: $(System.DefaultWorkingDirectory)/LandingZoneAWS/terraform
+            service_connection:
+            backend_rg_name:
+            backend_storage_account:
+            container_name: ${{ parameters.clusterName }}
+            state_file_name: ${{ parameters.clusterName }}.state

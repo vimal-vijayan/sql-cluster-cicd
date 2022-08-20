@@ -1,0 +1,52 @@
+parameters:
+  terraformVersion: '0.15.3'
+  workingDirectory:
+  extra_arguments: "-auto-approve -lock=false"
+  service_connection:
+  backend_rg_name:
+  backend_storage_account:
+  container_name:
+  state_file_name:
+
+steps:
+- task: TerraformInstaller@0
+  displayName: Terraform Install
+  enabled: true
+  inputs:
+    terraformVersion: ${{ parameters.terraformVersion }}
+
+- task: TerraformTaskV3@3
+  inputs:
+    provider: 'azurerm'
+    command: 'init'
+    commandOptions: ${{ parameters.extra_arguments }}
+    workingDirectory: ${{ parameters.workingDirectory }}
+    backendServiceArm: ${{ parameters.service_connection }}
+    backendAzureRmResourceGroupName: ${{ parameters.backend_rg_name }}
+    backendAzureRmStorageAccountName: ${{ parameters.backend_storage_account }}
+    backendAzureRmContainerName: ${{ parameters.container_name }}
+    backendAzureRmKey: ${{ parameters.state_file_name }}
+
+- task: TerraformTaskV3@3
+  inputs:
+    provider: 'azurerm'
+    command: 'plan'
+    commandOptions: ${{ parameters.extra_arguments }}
+    workingDirectory: ${{ parameters.workingDirectory }}
+    backendServiceArm: ${{ parameters.service_connection }}
+    backendAzureRmResourceGroupName: ${{ parameters.backend_rg_name }}
+    backendAzureRmStorageAccountName: ${{ parameters.backend_storage_account }}
+    backendAzureRmContainerName: ${{ parameters.container_name }}
+    backendAzureRmKey: ${{ parameters.state_file_name }}
+
+- task: TerraformTaskV3@3
+  inputs:
+    provider: 'azurerm'
+    command: "apply"
+    commandOptions: ${{ parameters.extra_arguments }}
+    workingDirectory: ${{ parameters.workingDirectory }}
+    backendServiceArm: ${{ parameters.service_connection }}
+    backendAzureRmResourceGroupName: ${{ parameters.backend_rg_name }}
+    backendAzureRmStorageAccountName: ${{ parameters.backend_storage_account }}
+    backendAzureRmContainerName: ${{ parameters.container_name }}
+    backendAzureRmKey: ${{ parameters.state_file_name }}

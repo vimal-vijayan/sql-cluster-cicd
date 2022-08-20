@@ -1,0 +1,22 @@
+parameters:
+  rootDirectory: $(System.DefaultWorkingDirectory)
+
+steps:
+- task: replacetokens@5
+  name: setvariable
+  displayName: setting terraform variables
+  inputs:
+    rootDirectory: ${{ parameters.rootDirectory }}
+    targetFiles: '**/*.tfvars'
+    encoding: 'auto'
+    tokenPattern: 'custom'
+    tokenPrefix: '__'
+    tokenSuffix: '__'
+    writeBOM: true
+    actionOnMissing: 'continue'
+    keepToken: false
+    actionOnNoFiles: 'continue'
+    enableTransforms: false
+    enableRecursion: false
+    useLegacyPattern: false
+    enableTelemetry: true

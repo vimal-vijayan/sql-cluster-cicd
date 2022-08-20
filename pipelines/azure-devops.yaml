@@ -1,0 +1,969 @@
+name: $(Build.DefinitionName)_$(clusterName)_$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger:
+- none
+
+pool:
+  vmImage: 'windows-2019'
+
+variables:
+- template: landingzone-variables.yaml
+- name: windowsAmi
+  value: Windows_Server-2016-English-Full-Base-*
+- name: agent-name
+  value: AwsTestSqlCluster02
+- name: urlNamingApiV2
+  value: https://onecloudselfserviceapi.deloitte.com/api/serverRegistrations
+
+
+parameters:
+- name: agentName
+  displayName: ADO Agent Name
+  default: AwsTestSqlCluster02
+  type: string
+
+- name: typeOfEnv
+  displayName: Select type of Environment (*) [DE = dev, QA=qa, LD=load, ST=stage, BC = bcp, PD = prod] [The AWS parameter store values needed to be setup with respect to the environment eg:/SqlCluster/dev/adoPat for DE | /SqlCluster/prod/Url for PD]
+  default: DE
+  type: string
+  values:
+    - DE
+    - QA
+    - LD
+    - ST
+    - BC
+    - PD
+
+- name: appServerType
+  displayName: Select The Type Of SQL Cluster
+  default: Silver
+  type: string
+  values:
+    - Silver
+    - Gold
+
+- name: windowsVersion
+  displayName: Select the Windows Version
+  default: 2019
+  type: number
+  values:
+    - 2016
+    - 2019
+
+- name: region1
+  displayName: Select Region 1
+  default: 'us-east-1'
+  type: string
+  values:
+    - 'us-east-2'
+    - 'us-east-1'
+    - 'us-west-1'
+    - 'us-west-2'
+
+- name: vpcId1
+  displayName: Enter VPC ID Region 1
+  default: vpc-01da23689ec433526
+  type: string
+
+- name: subnetIds1
+  displayName: Enter Subnet ID's region 1 (comma seperate one more subnets)
+  type: string
+  default: subnet-05305d7549ca69c94,subnet-0936ce6c9a3ac80c9
+
+- name: region2
+  displayName: Select Region 2
+  default: us-west-2
+  type: string
+  values:
+    - 'us-east-2'
+    - 'us-east-1'
+    - 'us-west-1'
+    - 'us-west-2'
+
+- name: vpcId2
+  displayName: Enter VPC ID Region 2
+  default: vpc-01eb9bf1028fd620d
+  type: string
+
+- name: subnetIds2
+  displayName: Enter Subnet ID's region 2 (comma seperate one more subnets)
+  type: string
+  default: subnet-0cb37c00d8b2a6cae,subnet-0d37f9836f6bc9744
+
+- name: instance_type
+  displayName: Enter Instance Type
+  type: string
+  default: r5b.large
+  values:
+    - r5b.metal
+    - m5.large
+    - m5.xlarge
+    - m5.2xlarge
+    - m5.4xlarge
+    - m5.8xlarge
+    - m5.16xlarge
+    - m5.24xlarge
+    - m5.metal
+    - t3.large
+    - t3.xlarge
+
+- name: Edrive
+  displayName: Size (GB) for Drive E
+  type: number
+  default: 150
+
+- name: Fdrive
+  displayName: Size (GB) for Drive F
+  type: number
+  default: 300
+
+- name: Gdrive
+  displayName: Size (GB) for Drive G
+  type: number
+  default: 150
+
+- name: serviceConnection
+  displayName: AWS Service Connection Name
+  default: SCM DCM MSP Test Account
+  type: string
+
+- name: terraformServiceConnection
+  displayName:  AWS-Terraform Service Connection Name
+  default: AWSDevTerraform1307
+  type: string
+
+- name: bucketName
+  displayName:  AWS s3 Bucket Name (New bucket with cluster name will be created if No bucket name provided, Recommended to use single s3 bucket for a AWS Account)
+  default: Nil
+  type: string
+
+- name: clusterName
+  displayName: Enter Cluster Name (Use lowercase for clustername)
+  default: awscluster01
+  type: string
+
+- name: fssOwner
+  displayName: Select FSS Owner (*)
+  default: ITS
+  type: string
+  values:
+    - ITS
+    - AUD
+    - ADV
+    - ENA
+    - TAX
+    - CON
+
+- name: skipCluster
+  displayName: Change the value to false and run the pipeline only if SQL installation fails for the 1st try
+  default: true
+  type: string
+  values:
+  - true
+  - false
+jobs:
+
+- job: init
+  displayName: Collect Server Names
+  variables:
+    appServerType: ${{ parameters.appServerType }}
+    subnetIds1: "${{ parameters.subnetIds1 }}"
+    subnetIds2: "${{ parameters.subnetIds2 }}"
+    typeOfEnv: ${{ parameters.typeOfEnv }}
+
+  steps:
+  - powershell: |
+      $typeOfEnv = "$(typeOfEnv)"
+      $env_type = switch ( $typeOfEnv )
+      {
+          'DE' { 'dev' }
+          'QA' { 'qa' }
+          'LD' { 'load' }
+          'ST' { 'stage' }
+          'BC' { 'bcp' }
+          'PD' { 'prod' }
+          'NPD' { 'nonprod' }
+      }
+      Write-Host "Type of Environment : " $env_type 
+      echo "##vso[task.setvariable variable=env_type;isOutput=true]$env_type"
+      echo "##vso[task.setvariable variable=env_type]$env_type"
+    name: setTypeOfEnv
+    displayName: Set Type Of Environment
+
+  - task: SystemsManagerGetParameter@1
+    displayName: Loading Pipeline Configuration
+    inputs:
+      awsCredentials: "${{ parameters.serviceConnection }}"
+      regionName: "${{ parameters.region1 }}"
+      readMode: 'hierarchy'
+      parameterPath: '/SqlCluster/$(env_type)/'
+      hierarchyNameTransform: 'leaf'
+
+  - powershell: |
+      echo ''
+      echo '----Input Parameters for Resource Group Creation -----'
+      echo ''
+      echo 'App Server Type             : ${{parameters.appServerType}}'
+      echo 'Location 1                  : ${{ parameters.region1 }}'
+      echo 'Location 2                  : ${{ parameters.region2 }}'
+      echo 'FSS Owner                   : ${{ parameters.fssOwner }} '
+      echo 'Type of Environment         : ${{ parameters.typeOfEnv }} '
+      echo 'System name for Naming API  : ${{ parameters.clusterName }} '
+      echo 'Agent Pool Name             : ${{ parameters.clusterName }} '
+      echo 'ADO Organization            : $(System.CollectionUri)'
+      echo 'App Server Type             : ${{ parameters.appServerType }}'
+      echo 'Windows Version             : ${{ parameters.windowsVersion }} '
+      echo 'VPC ID Region 1             : ${{ parameters.vpcId1 }}'
+      echo 'subnet Ids Location1        : ${{ parameters.subnetIds1 }}'
+      echo 'VPC ID Region 2             : ${{ parameters.vpcId1 }}'
+      echo 'subnet Ids Location2        : ${{ parameters.subnetIds2 }}'
+      echo 'Instance Type               : ${{ parameters.instance_type }}'
+      echo 'E Drive                     : ${{ parameters.Edrive }}'
+      echo 'F Drive                     : ${{ parameters.Fdrive }}'
+      echo 'G Drive                     : ${{ parameters.Gdrive }}'
+      echo 'S3 bucketName               : ${{ parameters.bucketName }}'
+      try {
+        Write-Host 'ADO URL                     : '$(System.CollectionUri)''
+        Write-Host 'ADO PAT                     : '$(adoPat)''
+        Write-Host 'Client Secret               : '$(client-secret)''
+        Write-Host 'Country Code                : '$(country-code)''
+        Write-Host 'Naming Client ID            : '$(namingClientId)''
+        Write-Host 'Service User                : '$(saadminuser)''
+        Write-Host 'SQL Agent URL               : '$(System.CollectionUri)''
+        Write-Host 'SQL Setup User              : '$(sqlsetupuser)''
+        Write-Host 'SQL setup password          : '$(sqlsetuppass)''
+        Write-Host 'Oauth Api URL               : '$(urlOauthApi)''
+        Write-Host 'Naming Api URL V2           : '$(urlNamingApiV2)''
+      }
+
+      catch {
+        Write-Host "-----------------------------------------------------------------"
+        Write-Error "An error occurred: Check the AWS Parameter store values provided"
+        Write-Host "-----------------------------------------------------------------"
+        Write-Host $_
+        Exit 0
+      }
+      
+      
+      $temp = "$(appServerType)"
+      if ( $temp -eq 'Silver' ){
+        $appServers1 = 2
+        $appServers2 = 1
+      } elseif ( $temp -eq 'Gold' ){
+        $appServers1 = 2 ;
+        $appServers2 = 2 ;
+      } else {
+        Write-Host "Else"
+        $appServers1 = 0 ;
+        $appServers2 = 0 ;
+      }
+      echo "##vso[task.setvariable variable=appServers1]$appServers1"
+      echo "##vso[task.setvariable variable=appServers2]$appServers2"
+    displayName: Display Parameters
+
+  - task: PowerShell@2
+    name: RequestServerName
+    inputs:
+      targetType: 'filePath'
+      filePath: $(System.DefaultWorkingDirectory)/LandingZoneAzure/namingserver.ps1
+      arguments: >
+        -urlOauthApi '$(urlOauthApi)'
+        -oauthResId '$(namingOauthResId)'
+        -clientId '$(namingClientId)'
+        -clientSecret '$(client-secret)'
+        -countryCode '$(country-code)'
+        -cloudProvider 'AWS'
+        -fssOwner '${{ parameters.fssOwner }}'
+        -typeOfEnv '${{ parameters.typeOfEnv }}'
+        -systemName '${{ parameters.clusterName }}-${{ parameters.region1 }}'
+        -appServers '$(appServers1)'
+        -urlNamingApi '$(urlNamingApiV2)'
+        -serverType 'DB'
+    displayName: 'Get location 1 VM Names'
+
+  - task: PowerShell@2
+    displayName: 'Display location1 VM Names'
+    name: SetVmNames1
+    enabled: true
+    inputs:
+      filePath: '$(System.DefaultWorkingDirectory)/LandingZoneAWS/set-vm-json.ps1'
+      arguments: >
+        -location     1
+
+  - task: PowerShell@2
+    name: RequestServerName2
+    inputs:
+      targetType: 'filePath'
+      filePath: $(System.DefaultWorkingDirectory)/LandingZoneAzure/namingserver.ps1
+      arguments: >
+        -urlOauthApi '$(urlOauthApi)'
+        -oauthResId '$(namingOauthResId)'
+        -clientId '$(namingClientId)'
+        -clientSecret '$(client-secret)'
+        -countryCode '$(country-code)'
+        -cloudProvider 'AWS'
+        -fssOwner '${{ parameters.fssOwner }}'
+        -typeOfEnv '${{ parameters.typeOfEnv }}'
+        -systemName '${{ parameters.clusterName }}-${{ parameters.region2 }}'
+        -appServers '$(appServers2)'
+        -urlNamingApi '$(urlNamingApiV2)'
+        -serverType 'DB'
+    displayName: 'Get location2 VM Names'
+
+  - task: PowerShell@2
+    displayName: 'Display location2 VM Names'
+    name: SetVmNames2
+    enabled: true
+    inputs:
+      filePath: '$(System.DefaultWorkingDirectory)/LandingZoneAWS/set-vm-json.ps1'
+      arguments: >
+        -vms1         '$(vms1)'
+        -subnetIds1   '$(subnetIds1)'
+        -subnetIds2   '$(subnetIds2)'
+        -location     2
+
+- job: createResources
+  displayName: Create Ec2 Instances
+  dependsOn:
+    - init
+  pool:
+    vmImage: 'ubuntu-latest'
+  variables:
+    vmsJson: $[ dependencies.init.outputs['SetVmNames2.vmsJson'] ]
+    appServerType: "${{ parameters.appServerType }}"
+    list1: $[ dependencies.init.outputs['SetVmNames1.list1'] ]
+    list2: $[ dependencies.init.outputs['SetVmNames2.list2'] ]
+    vpcId1: "${{ parameters.vpcId1 }}"
+    vpcId2: "${{ parameters.vpcId2 }}"
+    instance_type: "${{ parameters.instance_type }}"
+    terraformDir: LandingZoneAWS/terraform
+    subnetlist1: $[ dependencies.init.outputs['SetVmNames2.subnetlist1'] ]
+    subnetlist2: $[ dependencies.init.outputs['SetVmNames2.subnetlist2'] ]
+    clusterName: "${{ parameters.clusterName }}"
+    env_type: $[ dependencies.init.outputs['setTypeOfEnv.env_type'] ]
+    region2: ${{ parameters.region2 }}
+    region1: ${{ parameters.region1 }}
+    windowsAmi: 'Windows_Server-${{ parameters.windowsVersion }}-English-Full-Base-*'
+    Edrive : "${{ parameters.Edrive }}"
+    Fdrive : "${{ parameters.Fdrive }}"
+    Gdrive : "${{ parameters.Gdrive }}"
+  steps:
+
+  - powershell: |
+        Add-Content $(terraformDir)/terraform.tfvars "`n"
+        Add-Content $(terraformDir)/terraform.tfvars 'env_type = "$(env_type)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'clusterName = "$(clusterName)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'region1 = "$(region1)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'vm_names_location1 = $(list1)'
+        Add-Content $(terraformDir)/terraform.tfvars 'vm_names_location2 = $(list2)'
+        Add-Content $(terraformDir)/terraform.tfvars 'region2 = "$(region2)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'windows_ami = "$(windowsAmi)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'instance_type = "$(instance_type)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'vpc_id1 = "$(vpcId1)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'vpc_id2 = "$(vpcId2)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'subnet_ids1 = $(subnetlist1)'
+        Add-Content $(terraformDir)/terraform.tfvars 'subnet_ids2 = $(subnetlist2)'
+        Add-Content $(terraformDir)/terraform.tfvars 'hDriveSize = $(Edrive)'
+        Add-Content $(terraformDir)/terraform.tfvars 'fDriveSize = $(Fdrive)'
+        Add-Content $(terraformDir)/terraform.tfvars 'gDriveSize = $(Gdrive)'
+
+
+        echo 'Reading Terraform Variables....'
+        Get-Content -Path $(terraformDir)/terraform.tfvars
+
+    name: setvariable
+    enabled: true
+    displayName: Setting Variables
+
+  - task: AWSShellScript@1
+    enabled: true
+    name: createS3Bucket
+    displayName: Create S3 Bucket
+    condition: and(succeeded(), eq('${{ parameters.bucketName }}', 'Nil'))
+    inputs:
+      awsCredentials: "${{ parameters.serviceConnection }}"
+      regionName: $(region1)
+      scriptType: 'inline'
+      inlineScript: |
+        bucketName="dcm-$(env_type)-$(clusterName)"
+        region="$(region1)"
+        echo "Bucket Name   : ${bucketName}"
+        echo "Bucket Region : ${{ parameters.region1 }}"
+        aws s3api create-bucket --bucket ${bucketName} --region $(region1)
+
+  - task: TerraformInstaller@0
+    displayName: Terraform Install
+    enabled: true
+    inputs:
+      terraformVersion: '0.15.3'
+
+  - task: TerraformTaskV1@0
+    displayName: Terraform Initilization
+    condition: and(succeeded(), ne('${{ parameters.bucketName }}', 'Nil'))
+    enabled: true
+    inputs:
+      provider: 'aws'
+      command: 'init'
+      workingDirectory: '$(terraformDir)'
+      backendServiceAWS: "${{ parameters.terraformServiceConnection }}"
+      backendAWSBucketName: '${{ parameters.bucketName }}'
+      backendAWSKey: '$(clusterName)/tf/terraform.tfstate'
+
+  - task: TerraformTaskV1@0
+    displayName: Terraform Initilization
+    condition: and(succeeded(), eq('${{ parameters.bucketName }}', 'Nil'))
+    enabled: true
+    inputs:
+      provider: 'aws'
+      command: 'init'
+      workingDirectory: '$(terraformDir)'
+      backendServiceAWS: "${{ parameters.terraformServiceConnection }}"
+      backendAWSBucketName: 'dcm-sql-server-$(env_type)-$(clusterName)'
+      backendAWSKey: '$(clusterName)/tf/terraform.tfstate'
+
+  - task: TerraformTaskV1@0
+    displayName: Terraform Plan
+    enabled: true
+    inputs:
+      provider: 'aws'
+      command: 'plan'
+      workingDirectory: '$(terraformDir)'
+      environmentServiceNameAWS: "${{ parameters.terraformServiceConnection }}"
+
+  - task: TerraformTaskV1@0
+    displayName: Terraform Apply
+    enabled: true
+    inputs:
+      provider: 'aws'
+      command: 'apply'
+      workingDirectory: '$(terraformDir)'
+      commandOptions: --auto-approve -lock=false
+      environmentServiceNameAWS: "${{ parameters.terraformServiceConnection }}"
+
+- job: domainJoin
+  displayName: Waiting for Domain join to Finish.
+  variables:
+    vmsJson: $[ dependencies.init.outputs['SetVmNames2.vmsJson'] ]
+    env_type: $[ dependencies.init.outputs['setTypeOfEnv.env_type'] ]
+    agents: $[ dependencies.init.outputs['SetVmNames2.agents'] ]
+  pool:
+    name: "${{ parameters.agentName }}"
+  dependsOn:
+    - init
+    - createResources
+  steps:
+  - task: SystemsManagerGetParameter@1
+    displayName: Loading Pipeline Configurations
+
+    inputs:
+      awsCredentials: "${{ parameters.serviceConnection }}"
+      regionName: "${{ parameters.region1 }}"
+      readMode: 'hierarchy'
+      parameterPath: '/SqlCluster/$(env_type)/'
+      hierarchyNameTransform: 'leaf'
+
+  # - task: PowerShell@2
+  #   displayName: "Waiting for Domain join to Finish..."
+  #   continueOnError: true
+  #   inputs:
+  #     filePath: '$(System.DefaultWorkingDirectory)/LandingZoneAWS/domain-join-check.ps1'
+  #     arguments: >
+  #       -user       '$(saadminuser)'
+  #       -password   '$(saadminpass)'
+  #       -agents     '$(agents)'
+  #     enabled: true
+
+  - powershell: |
+        Write-Host "Waiting for Domain join to Finish..."
+        Start-Sleep -s 2400
+    enabled: true
+    displayName: 'Domain Join'
+
+- job: install
+  displayName: Install Agents/Tools
+  dependsOn:
+    - init
+    - createResources
+    - domainJoin
+  pool:
+    name: "${{ parameters.agentName }}"
+  # strategy:
+  #   matrix: $[ dependencies.init.outputs['SetVmNames2.vmsJson'] ]
+  variables:
+    agents: $[ dependencies.init.outputs['SetVmNames2.agents'] ]
+    env_type: $[ dependencies.init.outputs['setTypeOfEnv.env_type'] ]
+    vmsJson: $[ dependencies.init.outputs['SetVmNames2.vmsJson'] ]
+    vmlist: $[ dependencies.init.outputs['SetVmNames2.vmlist'] ]
+  steps:
+  - task: SystemsManagerGetParameter@1
+    displayName: Loading Pipeline Configurations
+    inputs:
+      awsCredentials: "${{ parameters.serviceConnection }}"
+      regionName: "${{ parameters.region1 }}"
+      readMode: 'hierarchy'
+      parameterPath: '/SqlCluster/$(env_type)/'
+      hierarchyNameTransform: 'leaf'
+
+  - task: PowerShell@2
+    displayName: 'Install ADO Agents'
+    # enabled: "${{ parameters.skipCluster }}"
+    enabled: true
+    name: installAdoAgent
+    inputs:
+      filePath: '$(System.DefaultWorkingDirectory)/LandingZoneAWS/ado-agent-installation.ps1'
+      arguments: >
+        -user       '$(saadminuser)'
+        -password   '$(saadminpass)'
+        -Url        '$(Url)'
+        -agentPool  "${{ parameters.clusterName }}"
+        -pat        '$(adoPat)'
+        -agents     '$(agents)'
+
+- job: adoAgent
+  displayName: Update ADO Agent Pool
+  dependsOn:
+    - init
+    - createResources
+    - domainJoin
+    - install
+  variables:
+    env_type: $[ dependencies.init.outputs['setTypeOfEnv.env_type'] ]
+  pool:
+    vmImage: 'ubuntu-latest'
+  steps:
+  - task: SystemsManagerGetParameter@1
+    displayName: Loading Pipeline Configurations
+    inputs:
+      awsCredentials: "${{ parameters.serviceConnection }}"
+      regionName: ${{ parameters.region1 }}
+      readMode: 'hierarchy'
+      parameterPath: '/SqlCluster/$(env_type)/'
+      hierarchyNameTransform: 'leaf'
+
+  - task: PowerShell@2
+    # enabled: "${{ parameters.skipCluster }}"
+    enabled: true
+    inputs:
+      targetType: 'filePath'
+      filePath: $(System.DefaultWorkingDirectory)/LandingZoneAWS/adoagentcapabilities.ps1
+      arguments: >
+        -organization '$(System.CollectionUri)'
+        -sqlPoolName '${{ parameters.clusterName }}'
+        -adoPat '$(adoPat)'
+        -key 'SqlNode'
+    displayName: 'Tag ADO Agents'
+
+- job: DiskPartition
+  displayName: Disk Partition
+  dependsOn:
+    - init
+    - createResources
+    - domainJoin
+    - adoAgent
+  pool:
+    name: ${{ parameters.clusterName }}
+  strategy:
+    matrix: $[ dependencies.init.outputs['SetVmNames2.vmsJson'] ]
+  steps:
+  - task: PowerShell@2
+    # enabled: "${{ parameters.skipCluster }}"
+    enabled: true
+    inputs:
+      targetType: 'inline'
+      script: |
+        $volumeLogPath = "c:\windows\temp\volumes.log"
+        $fSize = "${{ parameters.Fdrive }}"
+        $eSize = "${{ parameters.Edrive }}"
+        $gSize = "${{ parameters.Gdrive }}"
+
+        Get-Content $volumeLogPath | Sort-Object -Unique | Set-Content $volumeLogPath
+        $values = Get-Content $volumeLogPath | Out-String | ConvertFrom-StringData
+
+        Get-Disk | Where-Object IsOffline –EQ $True | Set-Disk –IsOffline $False
+        Get-Disk | Where-Object PartitionStyle –Eq 'RAW' | Initialize-Disk
+
+        $volumeId = $values.volumeId1
+        $driveNumber = (Get-Disk | Where-Object -Property SerialNumber -CMatch $volumeId).Number
+        New-Partition –DiskNumber $driveNumber -Size "$fSizegb" -DriveLetter F
+        Format-Volume -DriveLetter F -FileSystem NTFS -NewFileSystemLabel DBData -AllocationUnitSize 65536 -Confirm:$false
+        Start-Sleep 30
+
+        $volumeId = $values.volumeId2
+        $driveNumber = (Get-Disk | Where-Object -Property SerialNumber -CMatch $volumeId).Number
+        New-Partition –DiskNumber $driveNumber -Size "$eSizegb" -DriveLetter E
+        Format-Volume -DriveLetter E -FileSystem NTFS -NewFileSystemLabel DBData -AllocationUnitSize 65536 -Confirm:$false
+        Start-Sleep 30
+
+        $volumeId = $values.volumeId3
+        $driveNumber = (Get-Disk | Where-Object -Property SerialNumber -CMatch $volumeId).Number
+        New-Partition –DiskNumber $driveNumber -Size "$gSizegb" -DriveLetter G
+        Format-Volume -DriveLetter G -FileSystem NTFS -NewFileSystemLabel DBData -AllocationUnitSize 65536 -Confirm:$false
+        Start-Sleep 30
+    displayName: 'Create Disk Partition'
+
+- job: WinFailover
+  displayName: Enable Windows Failover
+  variables:
+    vmsJson: $[ dependencies.init.outputs['SetVmNames2.vmsJson'] ]
+  dependsOn:
+    - init
+    - createResources
+    - domainJoin
+    - adoAgent
+    - DiskPartition
+  pool:
+    name: ${{ parameters.clusterName }}
+  strategy:
+    matrix: $[ dependencies.init.outputs['SetVmNames2.vmsJson'] ]
+  steps:
+  - powershell: |
+        Write-Host $[ dependencies.init.outputs['SetVmNames.vmsJson'] ]
+        Write-Host "Build = " $(Agent.Name)
+        Write-Host "Running Powershell..."
+        Get-Host
+        Write-Host "Environment Variables: "
+        $env:UserDomain
+        $env:ComputerName
+        $env:UserName
+        Install-WindowsFeature -Name Failover-Clustering –IncludeManagementTools
+        Start-Sleep -s 100
+    # enabled: "${{ parameters.skipCluster }}"
+    enabled: true
+    displayName: 'Enabling Win Failover'
+
+- job: restartAgents
+  displayName: Restart Agents
+  variables:
+    vmsJson: $[ dependencies.init.outputs['SetVmNames2.vmsJson'] ]
+    env_type: $[ dependencies.init.outputs['setTypeOfEnv.env_type'] ]
+    vmlist: $[ dependencies.init.outputs['SetVmNames2.vmlist'] ]
+    agents: $[ dependencies.init.outputs['SetVmNames2.agents'] ]
+  dependsOn:
+    - init
+    - createResources
+    - domainJoin
+    - adoAgent
+    - DiskPartition
+    - WinFailover
+  pool:
+    name: "${{ parameters.agentName }}"
+  steps:
+  - task: SystemsManagerGetParameter@1
+    displayName: Loading Pipeline Configurations
+    inputs:
+      awsCredentials: "${{ parameters.serviceConnection }}"
+      regionName: "${{ parameters.region1 }}"
+      readMode: 'hierarchy'
+      parameterPath: '/SqlCluster/$(env_type)/'
+      hierarchyNameTransform: 'leaf'
+
+  - task: PowerShell@2
+    displayName: 'Restarting Agents'
+    # enabled: "${{ parameters.skipCluster }}"
+    enabled: true
+    name: restartAgents
+    inputs:
+      filePath: '$(System.DefaultWorkingDirectory)/LandingZoneAWS/server-restart.ps1'
+      arguments: >
+        -username   '$(saadminuser)'
+        -password   '$(saadminpass)'
+        -agents     '$(agents)'
+
+- job: winfailover2wait
+  displayName: Waiting for Restart
+  dependsOn:
+    - init
+    - createResources
+    - domainJoin
+    - adoAgent
+    - DiskPartition
+    - WinFailover
+    - restartAgents
+  steps:
+
+  - powershell: |
+      echo 'Waiting for Restart...'
+      Start-Sleep -s 120
+    name: winfailrestart
+    enabled: "${{ parameters.skipCluster }}"
+    displayName: 'Restarting...'
+
+- job: GetprivateIP
+  displayName: Get Cluster IP
+  dependsOn:
+    - init
+    - createResources
+  variables:
+    vms1: $[ dependencies.init.outputs['SetVmNames1.vms1'] ]
+    vms2: $[ dependencies.init.outputs['SetVmNames2.vms2'] ]
+  steps:
+
+  - task: AWSShellScript@1
+    enabled: "${{ parameters.skipCluster }}"
+    name: getClusterIP
+    displayName: Get Cluster IP
+    inputs:
+      awsCredentials: "${{ parameters.serviceConnection }}"
+      regionName: "${{ parameters.region1 }}"
+      scriptType: 'inline'
+      inlineScript: |
+        echo "Instance Names : $(vms1)"
+        echo "Instance Names : $(vms2)"
+        vmnames=(`echo $(vms1) | tr ' ' ' '`)
+        echo "Primary Node  : ${vmnames[0]}"
+        vmname=${vmnames[0]}
+        clusterIp=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=${vmname}"  --query Reservations[*].Instances[*].NetworkInterfaces[*].PrivateIpAddresses[*].[PrivateIpAddress][1] --output text)
+        echo "Cluster IP Address : ${clusterIp}" 
+        echo "##vso[task.setvariable variable=vmname;isOutput=true]$vmname"
+        echo "##vso[task.setvariable variable=clusterIp;isOutput=true]$clusterIp"
+
+        vm="$(vms1)"
+        vmnames=($vm)
+        len=${#vmnames[@]}
+        for (( i=0; i<${len}; i++ ));
+        do
+            Ip[$i]=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=${vmname}"  --query Reservations[*].Instances[*].NetworkInterfaces[*].PrivateIpAddresses[*].[PrivateIpAddress][0] --output text)
+            echo ${Ip[$i]}            
+        done
+        ipList=${Ip[*]}
+        echo "##vso[task.setvariable variable=ipList]$ipList"
+        echo "##vso[task.setvariable variable=ipList;isOutput=true]$ipList"
+
+- job: wincluster
+  displayName: Create Windows Cluster
+  dependsOn:
+    - init
+    - createResources
+    - domainJoin
+    - adoAgent
+    - DiskPartition
+    - WinFailover
+    - restartAgents
+    - winfailover2wait
+    - GetprivateIP
+  pool:
+    name: ${{ parameters.clusterName }}
+    # demands:
+    #   - SqlNode -equals 1
+  variables:
+    clusterName:    ${{ parameters.clusterName }}
+    storageAccount: ${{ parameters.clusterName }}
+    agentPoolName:  ${{ parameters.clusterName }}
+    vmsJson: $[ dependencies.init.outputs['SetVmNames2.vmsJson'] ]
+    agents: $[ dependencies.init.outputs['SetVmNames2.agents'] ]
+    vmname: $[ dependencies.GetprivateIP.outputs['getClusterIP.vmname'] ]
+    clusterIp: $[ dependencies.GetprivateIP.outputs['getClusterIP.clusterIp'] ]
+    env_type: $[ dependencies.init.outputs['setTypeOfEnv.env_type'] ]
+    masterNode: $[ dependencies.init.outputs['SetVmNames2.masterNode'] ]
+
+  steps:
+
+    - task: SystemsManagerGetParameter@1
+      displayName: Loading Pipeline Configurations
+      inputs:
+        awsCredentials: "${{ parameters.serviceConnection }}"
+        regionName: "${{ parameters.region1 }}"
+        readMode: 'hierarchy'
+        parameterPath: '/SqlCluster/$(env_type)/'
+        hierarchyNameTransform: 'leaf'
+
+    - powershell: |
+        $temp = "$(clusterIp)"
+        Write-Host "Temp value : " $temp 
+        [string]$clusterIp = $temp
+        Write-Host "Cluster IP : " $clusterIp
+        Write-Host "Agent name : " $(vmname)
+        Write-Host "Cluster Nodes : " $(agents)
+        Write-Host "Cluster Name : " $(agentPoolName) 
+        
+        $temp = "$(agents)"
+        [string]$agents = "$(agents)"  
+        [string[]]$agents = $agents.split()
+
+
+        if (-NOT( Get-Cluster -Name $(agentPoolName) -ErrorAction SilentlyContinue )){
+          Write-Host "Test Cluster..."
+          Test-Cluster –Node $agents -Include "Network","Inventory","System Configuration"
+
+          Write-Host "Creating Cluster....."
+          New-Cluster -Name $(agentPoolName) -Node $agents -StaticAddress $clusterIp -NoStorage
+
+          Write-Host "Cluster Created Successfuly...!!"
+          Write-Host "Cluster Name : " $(agentPoolName) 
+        }
+      displayName: Cluster Creation
+      # enabled: "${{ parameters.skipCluster }}"
+      enabled: true
+
+- job: removeUserData
+  displayName: Remove User Data
+  dependsOn:
+    - init
+    - createResources
+    - domainJoin
+    - adoAgent
+    - DiskPartition
+    - WinFailover
+    - restartAgents
+    - winfailover2wait
+    - GetprivateIP
+    - wincluster
+  variables:
+    vms1: $[ dependencies.init.outputs['SetVmNames1.vms1'] ]
+    vms2: $[ dependencies.init.outputs['SetVmNames2.vms2'] ]
+  steps:
+  - task: AWSShellScript@1
+    displayName: Remove User Data Region 1 Instances
+    enabled: true
+    inputs:
+      awsCredentials: "${{ parameters.serviceConnection }}"
+      regionName: "${{ parameters.region1 }}"
+      scriptType: "inline"
+      inlineScript: |
+        vm="$(vms1)"
+        vmnames=($vm)
+        len=${#vmnames[@]}
+        for (( i=0; i<${len}; i++ ));
+        do  
+            echo "VM Name: ${vmnames[$i]}"
+            instanceId[$i]=$(aws ec2 describe-instances --filters Name=tag:Name,Values=${vmnames[$i]} Name=instance-state-name,Values=running  --query Reservations[*].Instances[*].[InstanceId] --output text)
+            aws ec2 stop-instances --instance-ids ${instanceId[$i]}
+            sleep 120
+            aws ec2 modify-instance-attribute --instance-id ${instanceId[$i]} --user-data Value=
+        done
+        instanceIds=${instanceId[*]}
+        echo "Instance ID's : ${instanceIds}"
+        echo "Starting Instances..."
+        aws ec2 start-instances --instance-ids ${instanceIds} 
+        sleep 30
+
+  - task: AWSShellScript@1
+    displayName: Remove User Data Region 2 Instances
+    enabled: true
+    inputs:
+      awsCredentials: "${{ parameters.serviceConnection }}"
+      regionName: "${{ parameters.region2 }}"
+      scriptType: "inline"
+      inlineScript: |
+        vm="$(vms2)"
+        vmnames=($vm)
+        len=${#vmnames[@]}
+        for (( i=0; i<${len}; i++ ));
+        do  
+            echo "VM Name: ${vmnames[$i]}"
+            instanceId[$i]=$(aws ec2 describe-instances --filters Name=tag:Name,Values=${vmnames[$i]} Name=instance-state-name,Values=running  --query Reservations[*].Instances[*].[InstanceId] --output text)
+            aws ec2 stop-instances --instance-ids ${instanceId[$i]}
+            sleep 120
+            aws ec2 modify-instance-attribute --instance-id ${instanceId[$i]} --user-data Value=
+        done
+        instanceIds=${instanceId[*]}
+        echo "Instance ID's : ${instanceIds}"
+        echo "Starting Instances..."
+        aws ec2 start-instances --instance-ids ${instanceIds} 
+        sleep 30
+
+  - powershell: |
+      Start-Sleep 180
+    name: restartingNodes
+    enabled: true
+    displayName: 'Waiting for restart to complete..'
+
+- job: SqlInstall
+  timeoutInMinutes: 120
+  displayName: SQL Install
+  variables:
+    vmsJson: $[ dependencies.init.outputs['SetVmNames2.vmsJson'] ]
+    destinationlocation: 'c:\mediafile'
+    agentPoolName:  ${{ parameters.clusterName }}
+    env_type: $[ dependencies.init.outputs['setTypeOfEnv.env_type'] ]
+  dependsOn:
+    - init
+    - createResources
+    - domainJoin
+    - adoAgent
+    - DiskPartition
+    - WinFailover
+    - restartAgents
+    - winfailover2wait
+    - GetprivateIP
+    - wincluster
+    - removeUserData
+  pool:
+    name: ${{ parameters.clusterName }}
+  strategy:
+    matrix: $[ dependencies.init.outputs['SetVmNames2.vmsJson'] ]
+  steps:
+
+  - task: SystemsManagerGetParameter@1
+    displayName: Loading Pipeline Configurations
+    inputs:
+      awsCredentials: "${{ parameters.serviceConnection }}"
+      regionName: "${{ parameters.region1 }}"
+      readMode: 'hierarchy'
+      parameterPath: '/SqlCluster/$(env_type)/'
+      hierarchyNameTransform: 'leaf'
+
+  - powershell: |
+        Write-Host "Environment Variables: "
+        $env:UserDomain
+        $env:ComputerName
+        Write-Host "Destination Location : " $(destinationlocation)
+        Remove-SMBShare –Name SharedFolder -Force -ErrorAction SilentlyContinue
+        Remove-Item $(destinationlocation) -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item $(destinationlocation) -ItemType Directory -ErrorAction SilentlyContinue
+        New-SMBShare –Name SharedFolder –Path $(destinationlocation)  –FullAccess Administrators
+    name: createMediaDir
+    enabled: true
+    displayName: 'Create Media Directory'
+
+  - task: S3Download@1
+    displayName: Download SQL Setup Files
+    enabled: true
+    inputs:
+      awsCredentials: '$(ScriptAwsAccountServiceConnection)'
+      regionName: us-east-1
+      bucketName: '$(helperScriptBucket)'
+      globExpressions: '**'
+      targetFolder: '$(destinationlocation)'
+      forcePathStyleAddressing: true
+
+  - task: PowerShell@2
+    displayName: 'SQL Installation script'
+    enabled: true
+    inputs:
+      filePath: '$(System.DefaultWorkingDirectory)/LandingZoneAWS/sql-installation.ps1'
+      arguments: >
+        -destinationlocation   '$(destinationlocation)'
+        -password              '$(sqlsetuppass)'
+
+- job: sqlinstallpost
+  displayName: SQL Server Post Setup
+  dependsOn:
+    - init
+    - createResources
+    - domainJoin
+    - adoAgent
+    - DiskPartition
+    - WinFailover
+    - restartAgents
+    - winfailover2wait
+    - GetprivateIP
+    - wincluster
+    - removeUserData
+    - SqlInstall
+  condition: succeeded('SqlInstall')
+  variables:
+    env_type: $[ dependencies.init.outputs['setTypeOfEnv.env_type'] ]
+  pool:
+    name: ${{ parameters.clusterName }}
+  strategy:
+    matrix: $[ dependencies.init.outputs['SetVmNames2.vmsJson'] ]
+  steps:
+    - task: SystemsManagerGetParameter@1
+      displayName: Loading Pipeline Configurations
+      inputs:
+        awsCredentials: "${{ parameters.serviceConnection }}"
+        regionName: "${{ parameters.region1 }}"
+        readMode: 'hierarchy'
+        parameterPath: '/SqlCluster/$(env_type)/'
+        hierarchyNameTransform: 'leaf'

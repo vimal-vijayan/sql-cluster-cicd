@@ -1,0 +1,129 @@
+parameters:
+  appServerType:
+  vpcId1:
+  vpcId2:
+  instance_type:
+  terraformDir:
+  clusterName:
+  region2:
+  region1:
+
+
+jobs:
+- job: createResources
+  displayName: Create Ec2 Instances
+  dependsOn:
+    - init
+  pool:
+    vmImage: 'ubuntu-latest'
+  variables:
+    vmsJson: $[ dependencies.init.outputs['SetVmNames2.vmsJson'] ]
+    appServerType: "${{ parameters.appServerType }}"
+    list1: $[ dependencies.init.outputs['SetVmNames1.list1'] ]
+    list2: $[ dependencies.init.outputs['SetVmNames2.list2'] ]
+    vpcId1: "${{ parameters.vpcId1 }}"
+    vpcId2: "${{ parameters.vpcId2 }}"
+    instance_type: "${{ parameters.instance_type }}"
+    terraformDir: LandingZoneAWS/terraform
+    subnetlist1: $[ dependencies.init.outputs['SetVmNames2.subnetlist1'] ]
+    subnetlist2: $[ dependencies.init.outputs['SetVmNames2.subnetlist2'] ]
+    clusterName: "${{ parameters.clusterName }}"
+    env_type: $[ dependencies.init.outputs['setTypeOfEnv.env_type'] ]
+    region2: ${{ parameters.region2 }}
+    region1: ${{ parameters.region1 }}
+    windowsAmi: 'Windows_Server-${{ parameters.windowsVersion }}-English-Full-Base-*'
+    Edrive : "${{ parameters.Edrive }}"
+    Fdrive : "${{ parameters.Fdrive }}"
+    Gdrive : "${{ parameters.Gdrive }}"
+  steps:
+
+  - powershell: |
+        Add-Content $(terraformDir)/terraform.tfvars "`n"
+        Add-Content $(terraformDir)/terraform.tfvars 'env_type = "$(env_type)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'clusterName = "$(clusterName)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'region1 = "$(region1)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'vm_names_location1 = $(list1)'
+        Add-Content $(terraformDir)/terraform.tfvars 'vm_names_location2 = $(list2)'
+        Add-Content $(terraformDir)/terraform.tfvars 'region2 = "$(region2)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'windows_ami = "$(windowsAmi)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'instance_type = "$(instance_type)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'vpc_id1 = "$(vpcId1)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'vpc_id2 = "$(vpcId2)"'
+        Add-Content $(terraformDir)/terraform.tfvars 'subnet_ids1 = $(subnetlist1)'
+        Add-Content $(terraformDir)/terraform.tfvars 'subnet_ids2 = $(subnetlist2)'
+        Add-Content $(terraformDir)/terraform.tfvars 'hDriveSize = $(Edrive)'
+        Add-Content $(terraformDir)/terraform.tfvars 'fDriveSize = $(Fdrive)'
+        Add-Content $(terraformDir)/terraform.tfvars 'gDriveSize = $(Gdrive)'
+
+
+        echo 'Reading Terraform Variables....'
+        Get-Content -Path $(terraformDir)/terraform.tfvars
+
+    name: setvariable
+    enabled: true
+    displayName: Setting Variables
+
+  - task: AWSShellScript@1
+    enabled: true
+    name: createS3Bucket
+    displayName: Create S3 Bucket
+    condition: and(succeeded(), eq('${{ parameters.bucketName }}', 'Nil'))
+    inputs:
+      awsCredentials: "${{ parameters.serviceConnection }}"
+      regionName: $(region1)
+      scriptType: 'inline'
+      inlineScript: |
+        bucketName="dcm-$(env_type)-$(clusterName)"
+        region="$(region1)"
+        echo "Bucket Name   : ${bucketName}"
+        echo "Bucket Region : ${{ parameters.region1 }}"
+        aws s3api create-bucket --bucket ${bucketName} --region $(region1)
+
+  - task: TerraformInstaller@0
+    displayName: Terraform Install
+    enabled: true
+    inputs:
+      terraformVersion: '0.15.3'
+
+  - task: TerraformTaskV1@0
+    displayName: Terraform Initilization
+    condition: and(succeeded(), ne('${{ parameters.bucketName }}', 'Nil'))
+    enabled: true
+    inputs:
+      provider: 'aws'
+      command: 'init'
+      workingDirectory: '$(terraformDir)'
+      backendServiceAWS: "${{ parameters.terraformServiceConnection }}"
+      backendAWSBucketName: '${{ parameters.bucketName }}'
+      backendAWSKey: '$(clusterName)/tf/terraform.tfstate'
+
+  - task: TerraformTaskV1@0
+    displayName: Terraform Initilization
+    condition: and(succeeded(), eq('${{ parameters.bucketName }}', 'Nil'))
+    enabled: true
+    inputs:
+      provider: 'aws'
+      command: 'init'
+      workingDirectory: '$(terraformDir)'
+      backendServiceAWS: "${{ parameters.terraformServiceConnection }}"
+      backendAWSBucketName: 'dcm-sql-server-$(env_type)-$(clusterName)'
+      backendAWSKey: '$(clusterName)/tf/terraform.tfstate'
+
+  - task: TerraformTaskV1@0
+    displayName: Terraform Plan
+    enabled: true
+    inputs:
+      provider: 'aws'
+      command: 'plan'
+      workingDirectory: '$(terraformDir)'
+      environmentServiceNameAWS: "${{ parameters.terraformServiceConnection }}"
+
+  - task: TerraformTaskV1@0
+    displayName: Terraform Apply
+    enabled: true
+    inputs:
+      provider: 'aws'
+      command: 'apply'
+      workingDirectory: '$(terraformDir)'
+      commandOptions: --auto-approve -lock=false
+      environmentServiceNameAWS: "${{ parameters.terraformServiceConnection }}"

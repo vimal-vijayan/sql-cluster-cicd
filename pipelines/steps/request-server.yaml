@@ -1,0 +1,29 @@
+parameters:
+  fssOwner:
+  typeOfEnv:
+  clusterName:
+  region:
+  appServers:
+- name: cloudProvider
+  default: "AWS"
+
+steps:
+- task: PowerShell@2
+  name: RequestServerName
+  inputs:
+    targetType: 'filePath'
+    filePath: $(System.DefaultWorkingDirectory)/LandingZoneAzure/namingserver.ps1
+    arguments: >
+      -urlOauthApi '$(urlOauthApi)'
+      -oauthResId '$(namingOauthResId)'
+      -clientId '$(namingClientId)'
+      -clientSecret '$(client-secret)'
+      -countryCode '$(country-code)'
+      -cloudProvider '${{ parameters.cloudProvider }}'
+      -fssOwner '${{ parameters.fssOwner }}'
+      -typeOfEnv '${{ parameters.typeOfEnv }}'
+      -systemName '${{ parameters.clusterName }}-${{ parameters.region }}'
+      -appServers '${{ parameters.appServers }}'
+      -urlNamingApi '$(urlNamingApiV2)'
+      -serverType 'DB'
+  displayName: 'Get ${{ parameters.region }} VM Names'
