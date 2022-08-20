@@ -1,4 +1,4 @@
-name: $(Build.DefinitionName)_$(clusterName)_$(Date:yyyyMMdd)$(Rev:.r)
+name: $(Build.DefinitionName)_$(Date:yyyyMMdd)$(Rev:.r)
 
 trigger:
 - none
@@ -253,13 +253,25 @@ stages:
           echo "##vso[task.setvariable variable=appServers2]$appServers2"
         displayName: Display Parameters
 
-      - template: steps/request-server.yaml
-        parameters:
-          fssOwner: ${{ parameters.fssOwner }}
-          typeOfEnv: ${{ parameters.typeOfEnv }}
-          clusterName: ${{ parameters.clusterName }}
-          region: ${{ parameters.region1 }}
-          appServers: $(appServers1)
+      - task: PowerShell@2
+        name: RequestServerName1
+        inputs:
+          targetType: 'filePath'
+          filePath: $(System.DefaultWorkingDirectory)/LandingZoneAzure/namingserver.ps1
+          arguments: >
+            -urlOauthApi '$(urlOauthApi)'
+            -oauthResId '$(namingOauthResId)'
+            -clientId '$(namingClientId)'
+            -clientSecret '$(client-secret)'
+            -countryCode '$(country-code)'
+            -cloudProvider '${{ parameters.cloudProvider }}'
+            -fssOwner '${{ parameters.fssOwner }}'
+            -typeOfEnv '${{ parameters.typeOfEnv }}'
+            -systemName '${{ parameters.clusterName }}-${{ parameters.region1 }}'
+            -appServers '$(appServers1)'
+            -urlNamingApi '$(urlNamingApiV2)'
+            -serverType 'DB'
+        displayName: 'Get ${{ parameters.region1 }} VM Names'
 
       - task: PowerShell@2
         displayName: 'Display location1 VM Names'
@@ -268,15 +280,27 @@ stages:
         inputs:
           filePath: '$(System.DefaultWorkingDirectory)/LandingZoneAWS/set-vm-json.ps1'
           arguments: >
-            -location     1    
+            -location     1  
 
-      - template: steps/request-server.yaml
-        parameters:
-          fssOwner: ${{ parameters.fssOwner }}
-          typeOfEnv: ${{ parameters.typeOfEnv }}
-          clusterName: ${{ parameters.clusterName }}
-          region: ${{ parameters.region2 }}
-          appServers: $(appServers2)
+      - task: PowerShell@2
+        name: RequestServerName2
+        inputs:
+          targetType: 'filePath'
+          filePath: $(System.DefaultWorkingDirectory)/LandingZoneAzure/namingserver.ps1
+          arguments: >
+            -urlOauthApi '$(urlOauthApi)'
+            -oauthResId '$(namingOauthResId)'
+            -clientId '$(namingClientId)'
+            -clientSecret '$(client-secret)'
+            -countryCode '$(country-code)'
+            -cloudProvider '${{ parameters.cloudProvider }}'
+            -fssOwner '${{ parameters.fssOwner }}'
+            -typeOfEnv '${{ parameters.typeOfEnv }}'
+            -systemName '${{ parameters.clusterName }}-${{ parameters.region2 }}'
+            -appServers '$(appServers2)'
+            -urlNamingApi '$(urlNamingApiV2)'
+            -serverType 'DB'
+        displayName: 'Get ${{ parameters.region2 }} VM Names'
 
       - task: PowerShell@2
         displayName: 'Display location2 VM Names'
@@ -289,6 +313,7 @@ stages:
             -subnetIds1   '$(subnetIds1)'
             -subnetIds2   '$(subnetIds2)'
             -location     2
+
     - job: createResources
       displayName: Create Ec2 Instances
       dependsOn:
@@ -313,12 +338,64 @@ stages:
         Fdrive : ${{ parameters.Fdrive }}
         Gdrive : ${{ parameters.Gdrive }}
       steps:
-        - template: steps/set-variable.yaml
-          parameters:
+        - task: replacetokens@5
+          name: setvariable
+          displayName: setting terraform variables
+          inputs:
             rootDirectory: $(System.DefaultWorkingDirectory)/LandingZoneAWS/terraform
+            targetFiles: '**/*.tfvars'
+            encoding: 'auto'
+            tokenPattern: 'custom'
+            tokenPrefix: '__'
+            tokenSuffix: '__'
+            writeBOM: true
+            actionOnMissing: 'continue'
+            keepToken: false
+            actionOnNoFiles: 'continue'
+            enableTransforms: false
+            enableRecursion: false
+            useLegacyPattern: false
+            enableTelemetry: true
+
         - template: steps/terraform-deploy.yaml
           parameters:
             workingDirectory: $(System.DefaultWorkingDirectory)/LandingZoneAWS/terraform
             terraformServiceConnection: ${{ parameters.terraformServiceConnection }}
             backendAWSBucketName: "dcm-sql-server-dev-sqlpool6"
             clusterName: ${{ parameters.clusterName }}
+
+        - task: TerraformInstaller@0
+          displayName: Terraform Install
+          enabled: true
+          inputs:
+            terraformVersion: '0.15.3'
+
+        - task: TerraformTaskV1@0
+          displayName: Terraform Initilization
+          enabled: true
+          inputs:
+            provider: 'aws'
+            command: 'init'
+            workingDirectory: "$(System.DefaultWorkingDirectory)/LandingZoneAWS/terraform"
+            backendServiceAWS: ${{ parameters.terraformServiceConnection }}
+            backendAWSBucketName: "dcm-sql-server-dev-sqlpool6"
+            backendAWSKey: '${{ parameters.clusterName }}/terraform.tfstate'
+
+        - task: TerraformTaskV1@0
+          displayName: Terraform Plan
+          enabled: true
+          inputs:
+            provider: 'aws'
+            command: 'plan'
+            workingDirectory: "$(System.DefaultWorkingDirectory)/LandingZoneAWS/terraform"
+            environmentServiceNameAWS: ${{ parameters.terraformServiceConnection }}
+
+        - task: TerraformTaskV1@0
+          displayName: Terraform Apply
+          enabled: true
+          inputs:
+            provider: 'aws'
+            command: 'apply'
+            workingDirectory: "$(System.DefaultWorkingDirectory)/LandingZoneAWS/terraform"
+            commandOptions: "--auto-approve -lock=false"
+            environmentServiceNameAWS: "${{ parameters.terraformServiceConnection }}"
