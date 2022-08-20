@@ -19,3 +19,5 @@ variable "fDriveSize" {}
 variable "gDriveSize" {}
 
 variable "instance_type" {}
+
+variable "ado_token" {}

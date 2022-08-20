@@ -150,48 +150,11 @@ resource "aws_instance" "sqlNode" {
           $volumeId = "${aws_ebs_volume.xvdg[count.index].id}".replace('-','')
           Add-Content $volumeLogPath "volumeId3=$volumeId"
 
-          $install_file_dir = "C:\ProgramData\PuppetLabs\facter\facts.d\elevated_groups.JSON"
-          If(-NOT (Test-Path $install_file_dir))
-          {
-              ##Puppet Installation
-              $domain = 'us.deloitte.com'
-              $install_file_dir = "c:\windows\temp\install.ps1"
-              [System.Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;
-              [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true };
-              $webClient = New-Object System.Net.WebClient;
-              $webClient.DownloadFile('https://uspup-cm.us.deloitte.com:8140/packages/current/install.ps1', $install_file_dir);
-              New-Item -Path 'C:\ProgramData\PuppetLabs\facter\facts.d\' -ItemType Directory -ErrorAction silentlycontinue
-              New-Item -Path 'C:\ProgramData\PuppetLabs\facter\facts.d\elevated_groups.JSON' -ItemType File -ErrorAction silentlycontinue
-              set-content C:\ProgramData\PuppetLabs\facter\facts.d\elevated_groups.JSON '{
-                "elevated_groups": {
-                  "Administrators": [
-                    "us\\SG-US SCM CLUSTERING",
-                    "US\\SG-US CMDB eDiscovery",
-                    "US\\SG-US SCM PM",
-                    "US\\SQL Admins",
-                    "US\\SQL Support"
-                  ]
-                }
-              }' -ErrorAction silentlycontinue
-              if ($null -ne $domain) {
-                $hostname = "${var.vm_names[count.index]}".ToLower()
-                $certname = "$hostname.$domain"
-                & $install_file_dir agent:certname=$certname
-              }
-              elseif ((Get-WmiObject -Class Win32_ComputerSystem).PartOfDomain -eq $false) {
-                Write-Output "Server is not part of a domain, and a domain was not passed to the task"
-              }
-              else {
-                & $install_file_dir
-              }
-              Start-Sleep -s 60
-              Rename-Computer -NewName "${var.vm_names[count.index]}" -Restart -Force
-          }else {
-              puppet agent -t
-              Restart-Service AmazonSSMAgent
-              Get-Service -ComputerName "${var.vm_names[count.index]}" -Name WinRM | Restart-Service
-              Enable-PSRemoting
-          }
+          Rename-Computer -NewName "${var.vm_names[count.index]}" #-Restart -Force
+
+          $ErrorActionPreference="Stop";If(-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent() ).IsInRole( [Security.Principal.WindowsBuiltInRole] "Administrator")){ throw "Run command in an administrator PowerShell prompt"};If($PSVersionTable.PSVersion -lt (New-Object System.Version("3.0"))){ throw "The minimum version of Windows PowerShell that is required by the script (3.0) does not match the currently running version of Windows PowerShell." };If(-NOT (Test-Path $env:SystemDrive\'azagent')){mkdir $env:SystemDrive\'azagent'}; cd $env:SystemDrive\'azagent'; for($i=1; $i -lt 100; $i++){$destFolder="A"+$i.ToString();if(-NOT (Test-Path ($destFolder))){mkdir $destFolder;cd $destFolder;break;}}; $agentZip="$PWD\agent.zip";$DefaultProxy=[System.Net.WebRequest]::DefaultWebProxy;$securityProtocol=@();$securityProtocol+=[Net.ServicePointManager]::SecurityProtocol;$securityProtocol+=[Net.SecurityProtocolType]::Tls12;[Net.ServicePointManager]::SecurityProtocol=$securityProtocol;$WebClient=New-Object Net.WebClient; $Uri='https://vstsagentpackage.azureedge.net/agent/2.206.1/vsts-agent-win-x64-2.206.1.zip';if($DefaultProxy -and (-not $DefaultProxy.IsBypassed($Uri))){$WebClient.Proxy= New-Object Net.WebProxy($DefaultProxy.GetProxy($Uri).OriginalString, $True);}; $WebClient.DownloadFile($Uri, $agentZip);Add-Type -AssemblyName System.IO.Compression.FileSystem;[System.IO.Compression.ZipFile]::ExtractToDirectory( $agentZip, "$PWD");.\config.cmd --environment --unattended --environmentname “test” --agent $env:COMPUTERNAME --runasservice --work '_work' --url 'https://dev.azure.com/dev-apps-its-us-deloitte/' --projectname ‘DCMigration-Sandbox’ --auth PAT --token ${var.ado_token}; Remove-Item $agentZip;
+
+          Restart-Computer -Force
           </powershell>
   EOF
 

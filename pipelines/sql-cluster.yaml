@@ -14,7 +14,7 @@ variables:
   value: AwsTestSqlCluster02
 - name: urlNamingApiV2
   value: https://onecloudselfserviceapi.deloitte.com/api/serverRegistrations
-
+- group: SQL-AWS
 
 parameters:
 - name: agentName
@@ -191,14 +191,12 @@ stages:
         Fdrive : ${{ parameters.Fdrive }}
         Gdrive : ${{ parameters.Gdrive }}
       steps:
-        - template: set-variable.yaml
+        - template: steps/set-variable.yaml
           parameters:
             rootDirectory: $(System.DefaultWorkingDirectory)/LandingZoneAWS/terraform
-        - template: terraform-deploy.yaml
+        - template: steps/terraform-deploy.yaml
           parameters:
             workingDirectory: $(System.DefaultWorkingDirectory)/LandingZoneAWS/terraform
-            service_connection:
-            backend_rg_name:
-            backend_storage_account:
-            container_name: ${{ parameters.clusterName }}
-            state_file_name: ${{ parameters.clusterName }}.state
+            terraformServiceConnection: ${{ parameters.terraformServiceConnection }}
+            backendAWSBucketName: "dcm-sql-server-dev-sqlpool6"
+            clusterName: ${{ parameters.clusterName }}
